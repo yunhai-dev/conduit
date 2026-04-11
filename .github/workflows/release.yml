@@ -92,7 +92,8 @@ jobs:
 
       - name: Smoke test binary
         if: matrix.smoke_test
-        run: "target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}" --help
+        run: |
+          "target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}" --help
 
       - name: Package release archive
         shell: bash
