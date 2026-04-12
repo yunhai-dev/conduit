@@ -31,3 +31,10 @@
      - 已补充 server/remote-host 基础单元测试
      - 已更新 `--server` 错误文案，避免误导为仅支持 IP socket address
    - **Validation**: `cargo test`，认证错误/端口冲突/本地服务未启动时错误信息清晰
+5. **Stage 5**: Runtime 自动重连韧性
+   - **Status**: In Progress
+   - **Done**:
+     - 计划在 `expose::run` 外层加入 reconnect supervisor，避免 SSH session 瞬断时前台/后台直接退出
+     - 保持单条 forwarded 连接失败仅记录日志，不扩大为整条 tunnel 失败
+     - daemon tunnel 在 SSH session 掉线后切换到 `Reconnecting`，待 remote forward 恢复后再回到 `Running`
+   - **Validation**: `cargo test` / `cargo check`，并手工验证 SSH session 中断后状态切到 `Reconnecting` 且可以自动恢复转发；认证失败时应快速失败而不是无限重试

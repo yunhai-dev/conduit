@@ -14,5 +14,5 @@
 
 - **conduit-expose**
   - Goal: 完成纯 Rust SSH 反向端口转发主链路，并作为未来 `conduit connect` 的运行时基础。
-  - Scope: 前台运行、`--daemon` 后台运行、密码/私钥认证、远端默认公网绑定、错误路径与基础测试收口。
+  - Scope: 前台运行、`--daemon` 后台运行、密码/私钥认证、远端默认公网绑定、错误路径与基础测试收口，以及 SSH 会话断开后的自动重连韧性与 `Reconnecting` 状态可见性。
   - Detail Plan: `docs/plan/conduit-expose.md`

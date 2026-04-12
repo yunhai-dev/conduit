@@ -13,6 +13,7 @@ const LOGS_DIR_NAME: &str = "logs";
 pub enum TunnelStatus {
     Starting,
     Running,
+    Reconnecting,
     Exited,
     Failed,
     Stale,
@@ -23,6 +24,7 @@ impl TunnelStatus {
         match self {
             Self::Starting => "starting",
             Self::Running => "running",
+            Self::Reconnecting => "reconnecting",
             Self::Exited => "exited",
             Self::Failed => "failed",
             Self::Stale => "stale",
@@ -33,6 +35,7 @@ impl TunnelStatus {
         match value {
             "starting" => Some(Self::Starting),
             "running" => Some(Self::Running),
+            "reconnecting" => Some(Self::Reconnecting),
             "exited" => Some(Self::Exited),
             "failed" => Some(Self::Failed),
             "stale" => Some(Self::Stale),
@@ -41,7 +44,7 @@ impl TunnelStatus {
     }
 
     fn is_active(self) -> bool {
-        matches!(self, Self::Starting | Self::Running)
+        matches!(self, Self::Starting | Self::Running | Self::Reconnecting)
     }
 }
 
@@ -209,6 +212,10 @@ pub fn create_starting_record(
 
 pub fn mark_running(id: &str) -> anyhow::Result<()> {
     update_status(id, TunnelStatus::Running)
+}
+
+pub fn mark_reconnecting(id: &str) -> anyhow::Result<()> {
+    update_status(id, TunnelStatus::Reconnecting)
 }
 
 pub fn mark_failed(id: &str) -> anyhow::Result<()> {
@@ -473,7 +480,7 @@ mod tests {
             remote_port: 8080,
             daemon: true,
             log_file: PathBuf::from("/tmp/conduit.log"),
-            status: TunnelStatus::Running,
+            status: TunnelStatus::Reconnecting,
         };
 
         let parsed = TunnelRecord::from_wire(&record.to_wire()).unwrap();

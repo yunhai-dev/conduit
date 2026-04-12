@@ -1,6 +1,6 @@
 use crate::expose::auth::RuntimeAuth;
 use crate::expose::types::ExposeConfig;
-use anyhow::{Context, anyhow, bail};
+use anyhow::anyhow;
 use russh::client::{self, AuthResult, Msg};
 use russh::keys::{self, Algorithm, HashAlg, PublicKey, key::PrivateKeyWithHashAlg};
 use russh::{Channel, Error as RusshError};
@@ -12,6 +12,23 @@ use tracing::{debug, info, warn};
 pub struct SshTunnel {
     handle: client::Handle<ClientHandler>,
     forwarded_connections: mpsc::Receiver<ForwardedConnection>,
+}
+
+#[derive(Debug)]
+pub enum ConnectError {
+    Transport(anyhow::Error),
+    InvalidPrivateKey(anyhow::Error),
+    AuthenticationRejected(anyhow::Error),
+}
+
+#[derive(Debug)]
+pub enum ForwardError {
+    RequestDenied { remote_host: String, remote_port: u16 },
+    Request {
+        remote_host: String,
+        remote_port: u16,
+        source: RusshError,
+    },
 }
 
 pub struct ForwardedConnection {
@@ -107,15 +124,20 @@ impl Debug for ClientHandler {
 }
 
 impl SshTunnel {
-    pub async fn connect(config: &ExposeConfig, auth: &RuntimeAuth) -> anyhow::Result<Self> {
+    pub async fn connect(config: &ExposeConfig, auth: &RuntimeAuth) -> Result<Self, ConnectError> {
         let ssh_config = Arc::new(client::Config::default());
         let (forwarded_connections_tx, forwarded_connections) = mpsc::channel(64);
         let handler = ClientHandler::new(forwarded_connections_tx);
 
         let mut handle = client::connect(ssh_config, &config.server, handler)
             .await
-            .map_err(|error| error.0)
-            .with_context(|| format!("failed to connect to SSH server {}", config.server))?;
+            .map_err(|error| {
+                ConnectError::Transport(anyhow!(
+                    "failed to connect to SSH server {}: {}",
+                    config.server,
+                    error.0
+                ))
+            })?;
 
         authenticate(&mut handle, config, auth).await?;
 
@@ -131,16 +153,21 @@ impl SshTunnel {
         &self,
         remote_host: &str,
         remote_port: u16,
-    ) -> anyhow::Result<u32> {
+    ) -> Result<u32, ForwardError> {
         let bound_port = self
             .handle
             .tcpip_forward(remote_host, u32::from(remote_port))
             .await
-            .with_context(|| {
-                format!(
-                    "failed to register remote forward on {}:{}",
-                    remote_host, remote_port
-                )
+            .map_err(|error| match error {
+                RusshError::RequestDenied => ForwardError::RequestDenied {
+                    remote_host: remote_host.to_string(),
+                    remote_port,
+                },
+                other => ForwardError::Request {
+                    remote_host: remote_host.to_string(),
+                    remote_port,
+                    source: other,
+                },
             })?;
 
         Ok(bound_port)
@@ -155,30 +182,52 @@ async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
     config: &ExposeConfig,
     auth: &RuntimeAuth,
-) -> anyhow::Result<()> {
+) -> Result<(), ConnectError> {
     let auth_result = match auth {
         RuntimeAuth::Password(password) => {
             info!(user = %config.user, "authenticating with SSH password");
             handle
                 .authenticate_password(&config.user, password)
                 .await
-                .context("SSH password authentication failed")?
+                .map_err(|error| {
+                    ConnectError::Transport(anyhow!(
+                        "SSH password authentication failed for {}@{}: {}",
+                        config.user,
+                        config.server,
+                        error
+                    ))
+                })?
         }
         RuntimeAuth::PrivateKeyFile(path) => {
             info!(user = %config.user, key = %path.display(), "authenticating with SSH private key");
-            let private_key = keys::load_secret_key(path, None)
-                .with_context(|| format!("failed to load private key {}", path.display()))?;
-            let hash_alg = select_hash_alg(handle, &private_key).await?;
+            let private_key = keys::load_secret_key(path, None).map_err(|error| {
+                ConnectError::InvalidPrivateKey(anyhow!(
+                    "failed to load private key {}: {}",
+                    path.display(),
+                    error
+                ))
+            })?;
+            let hash_alg = select_hash_alg(handle, &private_key)
+                .await
+                .map_err(ConnectError::Transport)?;
             let private_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), hash_alg);
 
             handle
                 .authenticate_publickey(&config.user, private_key)
                 .await
-                .context("SSH public key authentication failed")?
+                .map_err(|error| {
+                    ConnectError::Transport(anyhow!(
+                        "SSH public key authentication failed for {}@{} using {}: {}",
+                        config.user,
+                        config.server,
+                        path.display(),
+                        error
+                    ))
+                })?
         }
     };
 
-    ensure_auth_success(auth_result)
+    ensure_auth_success(auth_result, config, auth)
 }
 
 async fn select_hash_alg(
@@ -192,7 +241,7 @@ async fn select_hash_alg(
     let hash_alg = handle
         .best_supported_rsa_hash()
         .await
-        .context("failed to determine RSA hash algorithm")?
+        .map_err(|error| anyhow!("failed to determine RSA hash algorithm: {}", error))?
         .flatten()
         .or(Some(HashAlg::Sha256));
 
@@ -204,10 +253,28 @@ async fn select_hash_alg(
     Ok(hash_alg)
 }
 
-fn ensure_auth_success(auth_result: AuthResult) -> anyhow::Result<()> {
+fn ensure_auth_success(
+    auth_result: AuthResult,
+    config: &ExposeConfig,
+    auth: &RuntimeAuth,
+) -> Result<(), ConnectError> {
     if auth_result.success() {
         return Ok(());
     }
 
-    bail!("SSH authentication was rejected by the server")
+    let error = match auth {
+        RuntimeAuth::Password(_) => anyhow!(
+            "SSH authentication was rejected by the server for {}@{} using password",
+            config.user,
+            config.server
+        ),
+        RuntimeAuth::PrivateKeyFile(path) => anyhow!(
+            "SSH authentication was rejected by the server for {}@{} using key {}",
+            config.user,
+            config.server,
+            path.display()
+        ),
+    };
+
+    Err(ConnectError::AuthenticationRejected(error))
 }
