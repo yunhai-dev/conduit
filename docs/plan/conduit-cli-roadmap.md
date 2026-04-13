@@ -46,14 +46,15 @@
    - 引入配置文件后，再统一全局选项如 `--config` / `--env` / `-v` / `-q`。
    - **Validation**: 配置初始化、读取、覆盖关系清晰。
 
-5. **Phase E: Expand advanced tunnel modes**
-   - 在 reverse TCP 路径稳定后，再评估：
-     - `forward`
+5. **Phase E: Expand remaining advanced tunnel modes**
+   - **Status**: In Progress
+   - `forward` 已以顶层 `conduit forward` 落地，首版支持多条 `-L` 映射共用一条 SSH session，并复用 daemon / registry / restart 链路。
+   - 在 reverse TCP 与 local forward 路径稳定后，再评估：
      - `dynamic`
-     - `tunnel` 子命令族
+     - `tunnel` 子命令族的进一步扩展
      - `monitor` / `stats`
      - `server`
-   - 这些功能都意味着新的 runtime 边界，不适合和当前 expose/connect 重构并行硬上。
+   - 这些功能仍然意味着新的 runtime 边界，不适合和当前 connect / forward 主链路收口并行硬上。
    - **Validation**: 每个命令独立有最小可用闭环。
 
 ### Decisions

@@ -1,12 +1,14 @@
 # conduit
 
-> Pure Rust SSH reverse port forwarding CLI.
+> Pure Rust SSH tunnel CLI.
 
-`conduit` 用来把远端端口通过 SSH 反向转发到本地 TCP 服务。当前推荐使用 `conduit connect`，`conduit expose` 继续保留为兼容入口；除了前台运行外，也支持 `--daemon` 后台运行，以及对本地启动的 managed tunnel 做生命周期管理。
+`conduit` 用来通过 SSH 建立 reverse tunnel 和 local forward tunnel。当前推荐使用 `conduit connect` 处理反向隧道，使用 `conduit forward` 处理正向隧道；`conduit expose` 继续保留为兼容入口。除了前台运行外，也支持 `--daemon` 后台运行，以及对本地启动的 managed tunnel 做生命周期管理。
 
 ## Highlights
 
 - 通过 `connect --remote <SPEC>` 建立 reverse TCP tunnel
+- 通过 `forward -L <SPEC> -r <SERVER>` 建立 local forward tunnel
+- `forward` 首版支持多条 `-L` 映射共用一条 SSH session
 - 支持密码认证和私钥认证
 - 支持前台运行与 `--daemon` 后台运行
 - 支持本地 managed tunnel 生命周期命令：`list`、`status` / `show`、`logs`、`close`、`stop`、`restart`、`delete`
@@ -60,8 +62,8 @@ conduit logs <ID> --tail 50
 
 - 推送匹配 `v*` 的 Git tag（例如 `v0.1.0`）后，GitHub Actions 会自动构建并上传 release 资产
 - 当前自动发布的目标：
-  - `x86_64-unknown-linux-gnu`
-  - `aarch64-unknown-linux-gnu`
+  - `x86_64-unknown-linux-musl`
+  - `aarch64-unknown-linux-musl`
   - `x86_64-apple-darwin`
   - `aarch64-apple-darwin`
 - 资产命名格式：`conduit-<tag>-<target>.tar.gz`
@@ -71,6 +73,7 @@ conduit logs <ID> --tail 50
 
 ```bash
 conduit connect
+conduit forward
 conduit expose
 conduit list
 conduit status
@@ -88,6 +91,7 @@ Help:
 ```bash
 conduit --help
 conduit connect --help
+conduit forward --help
 conduit tunnel --help
 ```
 
@@ -132,6 +136,45 @@ conduit connect \
 
 ```text
 ~/.conduit/tunnels/
+```
+
+### `forward -L <SPEC> -r <SERVER>`
+
+`forward` 用来建立本地端口转发，核心参数格式：
+
+```text
+-L LOCAL_PORT:TARGET_HOST:TARGET_PORT
+-r [USER@]SERVER[:PORT]
+```
+
+说明：
+
+- `-L` 可重复传入，多条映射共用同一条 SSH session
+- `LOCAL_PORT` 是本地监听端口
+- `TARGET_HOST:TARGET_PORT` 是通过 SSH server 侧访问的目标地址
+- `-r` 中可直接带 `USER@`，也可以改用 `--user`
+- 默认绑定 `127.0.0.1`；如需暴露到局域网，可使用 `--bind <ADDR>` 或 `--gateway`
+
+示例：
+
+```bash
+conduit forward \
+  -L 8080:web.internal:80 \
+  -L 5432:db.internal:5432 \
+  -r root@example.com:22 \
+  --key ~/.ssh/id_ed25519 \
+  --insecure-accept-host-key
+```
+
+后台运行：
+
+```bash
+conduit forward \
+  -L 8080:web.internal:80 \
+  -r root@example.com \
+  --password "your-password" \
+  --daemon \
+  --insecure-accept-host-key
 ```
 
 ### Compatibility: `expose`
@@ -227,7 +270,8 @@ conduit delete <ID> --force
 
 ## Limitations
 
-- 当前范围聚焦 **reverse TCP tunnel**，还没有实现 forward / dynamic / monitor / stats / server 等高级模式
+- 当前已支持 **reverse TCP tunnel** 与 **local forward tunnel**；`dynamic` / `monitor` / `stats` / `server` 等高级模式仍未实现
+- `tunnel create` 当前仍对应 reverse/connect 路径，forward 暂未挂到 `tunnel` 子命令族
 - V1 仍要求显式传入 `--insecure-accept-host-key`
 - 生命周期命令当前只管理“由本地 CLI 启动、且以 daemon 模式运行”的 tunnel
 - `restart` 不会持久化认证信息，执行时必须重新传入 `--password` 或 `--key`

@@ -20,6 +20,21 @@ pub enum ConduitError {
     )]
     InvalidRemoteSpec(String),
 
+    #[error("-r/--remote must be in the form [USER@]SERVER[:PORT]: {0}")]
+    InvalidForwardRemote(String),
+
+    #[error("-L/--local must be in the form LOCAL_PORT:TARGET_HOST:TARGET_PORT: {0}")]
+    InvalidForwardLocalSpec(String),
+
+    #[error("at least one -L/--local mapping is required")]
+    MissingForwardLocalSpec,
+
+    #[error("--bind must be a valid IP address: {0}")]
+    InvalidBindAddress(String),
+
+    #[error("duplicate local forward bind requested: {0}")]
+    DuplicateForwardBind(String),
+
     #[error("SSH username must be provided either via --user or USER@ in --remote")]
     MissingConnectUser,
 

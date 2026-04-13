@@ -1,5 +1,6 @@
 use crate::error::ConduitError;
 use crate::expose::types::ExposeConfig;
+use crate::forward::ForwardConfig;
 use anyhow::{Context, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,6 +9,29 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const STATE_DIR_NAME: &str = ".conduit";
 const TUNNELS_DIR_NAME: &str = "tunnels";
 const LOGS_DIR_NAME: &str = "logs";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TunnelMode {
+    Reverse,
+    Forward,
+}
+
+impl TunnelMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reverse => "reverse",
+            Self::Forward => "forward",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "reverse" => Some(Self::Reverse),
+            "forward" => Some(Self::Forward),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TunnelStatus {
@@ -52,6 +76,7 @@ impl TunnelStatus {
 pub struct TunnelRecord {
     pub id: String,
     pub command: String,
+    pub mode: TunnelMode,
     pub pid: u32,
     pub created_at: u64,
     pub updated_at: u64,
@@ -60,16 +85,57 @@ pub struct TunnelRecord {
     pub local: String,
     pub remote_host: String,
     pub remote_port: u16,
+    pub bind_addr: Option<String>,
+    pub forward_mappings: Vec<String>,
     pub daemon: bool,
     pub log_file: PathBuf,
     pub status: TunnelStatus,
 }
 
 impl TunnelRecord {
+    pub fn display_local(&self) -> String {
+        match self.mode {
+            TunnelMode::Reverse => self.local.clone(),
+            TunnelMode::Forward => {
+                match (self.bind_addr.as_deref(), self.forward_mappings.as_slice()) {
+                    (Some(bind_addr), [mapping]) => {
+                        if let Some((port, _)) = mapping.split_once(':') {
+                            format!("{}:{}", bind_addr, port)
+                        } else {
+                            bind_addr.to_string()
+                        }
+                    }
+                    (Some(bind_addr), mappings) => {
+                        format!("{} [{} mapping(s)]", bind_addr, mappings.len())
+                    }
+                    (None, _) => self.local.clone(),
+                }
+            }
+        }
+    }
+
+    pub fn display_remote(&self) -> String {
+        match self.mode {
+            TunnelMode::Reverse => format!("{}:{}", self.remote_host, self.remote_port),
+            TunnelMode::Forward => match self.forward_mappings.as_slice() {
+                [mapping] => mapping
+                    .split_once(':')
+                    .and_then(|(_, target)| {
+                        target
+                            .rsplit_once(':')
+                            .map(|(host, port)| format!("{}:{}", host, port))
+                    })
+                    .unwrap_or_else(|| mapping.clone()),
+                mappings => format!("{} target(s)", mappings.len()),
+            },
+        }
+    }
+
     fn to_wire(&self) -> String {
         [
             ("id", self.id.as_str()),
             ("command", self.command.as_str()),
+            ("mode", self.mode.as_str()),
             ("pid", &self.pid.to_string()),
             ("created_at", &self.created_at.to_string()),
             ("updated_at", &self.updated_at.to_string()),
@@ -78,6 +144,8 @@ impl TunnelRecord {
             ("local", self.local.as_str()),
             ("remote_host", self.remote_host.as_str()),
             ("remote_port", &self.remote_port.to_string()),
+            ("bind_addr", self.bind_addr.as_deref().unwrap_or("")),
+            ("forward_mappings", &self.forward_mappings.join(";")),
             ("daemon", if self.daemon { "true" } else { "false" }),
             ("log_file", self.log_file.to_string_lossy().as_ref()),
             ("status", self.status.as_str()),
@@ -90,6 +158,7 @@ impl TunnelRecord {
     fn from_wire(input: &str) -> anyhow::Result<Self> {
         let mut id = None;
         let mut command = None;
+        let mut mode = None;
         let mut pid = None;
         let mut created_at = None;
         let mut updated_at = None;
@@ -98,6 +167,8 @@ impl TunnelRecord {
         let mut local = None;
         let mut remote_host = None;
         let mut remote_port = None;
+        let mut bind_addr = None;
+        let mut forward_mappings = None;
         let mut daemon = None;
         let mut log_file = None;
         let mut status = None;
@@ -111,6 +182,7 @@ impl TunnelRecord {
             match key {
                 "id" => id = Some(value),
                 "command" => command = Some(value),
+                "mode" => mode = TunnelMode::parse(&value),
                 "pid" => pid = Some(value.parse::<u32>().context("invalid tunnel pid")?),
                 "created_at" => {
                     created_at = Some(value.parse::<u64>().context("invalid created_at")?)
@@ -125,6 +197,15 @@ impl TunnelRecord {
                 "remote_port" => {
                     remote_port = Some(value.parse::<u16>().context("invalid remote_port")?)
                 }
+                "bind_addr" => bind_addr = (!value.is_empty()).then_some(value),
+                "forward_mappings" => {
+                    let mappings = if value.is_empty() {
+                        Vec::new()
+                    } else {
+                        value.split(';').map(ToString::to_string).collect()
+                    };
+                    forward_mappings = Some(mappings);
+                }
                 "daemon" => daemon = Some(matches!(value.as_str(), "true")),
                 "log_file" => log_file = Some(PathBuf::from(value)),
                 "status" => {
@@ -134,9 +215,19 @@ impl TunnelRecord {
             }
         }
 
+        let command = command.context("missing tunnel command")?;
+        let mode = mode.unwrap_or_else(|| {
+            if command == "forward" {
+                TunnelMode::Forward
+            } else {
+                TunnelMode::Reverse
+            }
+        });
+
         Ok(Self {
             id: id.context("missing tunnel id")?,
-            command: command.context("missing tunnel command")?,
+            command,
+            mode,
             pid: pid.context("missing tunnel pid")?,
             created_at: created_at.context("missing created_at")?,
             updated_at: updated_at.context("missing updated_at")?,
@@ -145,6 +236,8 @@ impl TunnelRecord {
             local: local.context("missing tunnel local")?,
             remote_host: remote_host.context("missing tunnel remote_host")?,
             remote_port: remote_port.context("missing tunnel remote_port")?,
+            bind_addr,
+            forward_mappings: forward_mappings.unwrap_or_default(),
             daemon: daemon.context("missing tunnel daemon flag")?,
             log_file: log_file.context("missing tunnel log_file")?,
             status: status.context("missing tunnel status")?,
@@ -193,6 +286,7 @@ pub fn create_starting_record(
     let record = TunnelRecord {
         id: id.to_string(),
         command: command.to_string(),
+        mode: TunnelMode::Reverse,
         pid,
         created_at: now,
         updated_at: now,
@@ -201,6 +295,50 @@ pub fn create_starting_record(
         local: config.local.to_string(),
         remote_host: config.remote_host.clone(),
         remote_port: config.remote_port,
+        bind_addr: None,
+        forward_mappings: Vec::new(),
+        daemon: config.daemon,
+        log_file,
+        status: TunnelStatus::Starting,
+    };
+
+    save_record(&record)?;
+    Ok(record)
+}
+
+pub fn create_starting_forward_record(
+    id: &str,
+    command: &str,
+    config: &ForwardConfig,
+    pid: u32,
+) -> anyhow::Result<TunnelRecord> {
+    let now = now_secs();
+    let log_file = config
+        .log_file
+        .clone()
+        .context("managed daemon tunnel requires a log file")?;
+    let record = TunnelRecord {
+        id: id.to_string(),
+        command: command.to_string(),
+        mode: TunnelMode::Forward,
+        pid,
+        created_at: now,
+        updated_at: now,
+        server: config.server.clone(),
+        user: config.user.clone(),
+        local: format!(
+            "{} [{} mapping(s)]",
+            config.bind_addr,
+            config.mappings.len()
+        ),
+        remote_host: String::new(),
+        remote_port: 0,
+        bind_addr: Some(config.bind_addr.to_string()),
+        forward_mappings: config
+            .mappings
+            .iter()
+            .map(|mapping| mapping.encoded_spec())
+            .collect(),
         daemon: config.daemon,
         log_file,
         status: TunnelStatus::Starting,
@@ -462,7 +600,7 @@ fn terminate_process(_pid: u32) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TunnelRecord, TunnelStatus};
+    use super::{TunnelMode, TunnelRecord, TunnelStatus};
     use std::path::PathBuf;
 
     #[test]
@@ -470,6 +608,7 @@ mod tests {
         let record = TunnelRecord {
             id: "tunnel-1".to_string(),
             command: "connect".to_string(),
+            mode: TunnelMode::Reverse,
             pid: 1234,
             created_at: 1,
             updated_at: 2,
@@ -478,6 +617,8 @@ mod tests {
             local: "127.0.0.1:3000".to_string(),
             remote_host: "0.0.0.0".to_string(),
             remote_port: 8080,
+            bind_addr: None,
+            forward_mappings: Vec::new(),
             daemon: true,
             log_file: PathBuf::from("/tmp/conduit.log"),
             status: TunnelStatus::Reconnecting,
@@ -487,12 +628,15 @@ mod tests {
 
         assert_eq!(parsed.id, record.id);
         assert_eq!(parsed.command, record.command);
+        assert_eq!(parsed.mode, record.mode);
         assert_eq!(parsed.pid, record.pid);
         assert_eq!(parsed.server, record.server);
         assert_eq!(parsed.user, record.user);
         assert_eq!(parsed.local, record.local);
         assert_eq!(parsed.remote_host, record.remote_host);
         assert_eq!(parsed.remote_port, record.remote_port);
+        assert_eq!(parsed.bind_addr, record.bind_addr);
+        assert_eq!(parsed.forward_mappings, record.forward_mappings);
         assert_eq!(parsed.daemon, record.daemon);
         assert_eq!(parsed.log_file, record.log_file);
         assert_eq!(parsed.status, record.status);

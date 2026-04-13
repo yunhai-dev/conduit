@@ -42,7 +42,10 @@ impl ReconnectBackoff {
 
     fn next_delay(&mut self) -> Duration {
         let delay = self.next_delay;
-        let next = self.next_delay.checked_mul(2).unwrap_or(MAX_RECONNECT_DELAY);
+        let next = self
+            .next_delay
+            .checked_mul(2)
+            .unwrap_or(MAX_RECONNECT_DELAY);
         self.next_delay = std::cmp::min(next, MAX_RECONNECT_DELAY);
         delay
     }
@@ -60,7 +63,7 @@ pub async fn run(config: ExposeConfig, tunnel_id: Option<String>) -> anyhow::Res
         "starting SSH expose session"
     );
 
-    let auth = build_auth(&config);
+    let auth = build_auth(&config.auth);
     let mut backoff = ReconnectBackoff::new();
     let mut reconnect_attempt = 0u32;
 
@@ -162,7 +165,9 @@ async fn run_single_session(
     }
 
     Err(SessionFailure::Retryable {
-        error: anyhow!("expose loop terminated unexpectedly: SSH session ended while waiting for forwarded connections"),
+        error: anyhow!(
+            "expose loop terminated unexpectedly: SSH session ended while waiting for forwarded connections"
+        ),
         established: true,
     })
 }

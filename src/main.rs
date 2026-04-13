@@ -3,10 +3,11 @@ mod cli;
 mod daemon;
 mod error;
 mod expose;
+mod forward;
 mod logging;
 mod tunnel_registry;
 
-use crate::app::PreparedDaemonCommand;
+use crate::app::{PreparedDaemonCommand, PreparedTunnelConfig};
 use crate::cli::Cli;
 use clap::Parser;
 
@@ -38,7 +39,14 @@ fn main() {
 }
 
 fn run_daemon(mut prepared: PreparedDaemonCommand) {
-    prepared.config.log_file = Some(prepared.launch.log_file.clone());
+    match &mut prepared.config {
+        PreparedTunnelConfig::Reverse(config) => {
+            config.log_file = Some(prepared.launch.log_file.clone());
+        }
+        PreparedTunnelConfig::Forward(config) => {
+            config.log_file = Some(prepared.launch.log_file.clone());
+        }
+    }
 
     if let Err(error) = daemon::daemonize(&prepared.launch.log_file) {
         eprintln!("error: {error:#}");
@@ -57,12 +65,22 @@ fn run_daemon(mut prepared: PreparedDaemonCommand) {
         std::process::exit(1);
     }
 
-    if let Err(error) = tunnel_registry::create_starting_record(
-        &prepared.launch.tunnel_id,
-        &prepared.command,
-        &prepared.config,
-        std::process::id(),
-    ) {
+    let record_result = match &prepared.config {
+        PreparedTunnelConfig::Reverse(config) => tunnel_registry::create_starting_record(
+            &prepared.launch.tunnel_id,
+            &prepared.command,
+            config,
+            std::process::id(),
+        ),
+        PreparedTunnelConfig::Forward(config) => tunnel_registry::create_starting_forward_record(
+            &prepared.launch.tunnel_id,
+            &prepared.command,
+            config,
+            std::process::id(),
+        ),
+    };
+
+    if let Err(error) = record_result {
         eprintln!("error: {error:#}");
         std::process::exit(1);
     }

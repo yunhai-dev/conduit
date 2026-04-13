@@ -3,7 +3,7 @@
 
 ### Goals
 - 在推送版本 tag（`v*`）时，自动构建 `conduit` 的发布产物并上传到 GitHub Releases。
-- 首版范围聚焦 Linux + macOS，覆盖 amd64 与 arm64。
+- 首版范围聚焦 Linux（musl）+ macOS，覆盖 amd64 与 arm64。
 - 保持实现尽量简单：延续现有 Cargo 构建方式，不额外引入复杂发布框架。
 
 ### Stages
@@ -16,12 +16,12 @@
 
 2. **Stage 2**: 构建四个目标产物
    - **Status**: Code Complete, Remote Validation Pending
-   - Linux amd64: `x86_64-unknown-linux-gnu`
-   - Linux arm64: `aarch64-unknown-linux-gnu`
+   - Linux amd64: `x86_64-unknown-linux-musl`
+   - Linux arm64: `aarch64-unknown-linux-musl`
    - macOS amd64: `x86_64-apple-darwin`
    - macOS arm64: `aarch64-apple-darwin`
    - 复用二进制名 `conduit`
-   - Linux arm64 使用 `cross` 处理交叉编译，其余目标用 `cargo build --release --target ...`
+   - Linux musl targets 使用 `cross` 处理构建，其余目标用 `cargo build --release --target ...`
    - **Validation**: 每个 target 都能产出对应 `target/<triple>/release/conduit`
 
 3. **Stage 3**: 打包并上传到 GitHub Release

@@ -1,4 +1,4 @@
-use crate::expose::types::{AuthConfig, ExposeConfig};
+use crate::expose::types::AuthConfig;
 
 #[derive(Debug, Clone)]
 pub enum RuntimeAuth {
@@ -6,8 +6,8 @@ pub enum RuntimeAuth {
     PrivateKeyFile(std::path::PathBuf),
 }
 
-pub fn build_auth(config: &ExposeConfig) -> RuntimeAuth {
-    match &config.auth {
+pub fn build_auth(auth: &AuthConfig) -> RuntimeAuth {
+    match auth {
         AuthConfig::Password(password) => RuntimeAuth::Password(password.clone()),
         AuthConfig::PrivateKey(path) => RuntimeAuth::PrivateKeyFile(path.clone()),
     }

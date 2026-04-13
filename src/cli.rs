@@ -12,6 +12,7 @@ pub struct Cli {
 pub enum Commands {
     Connect(ConnectArgs),
     Expose(ExposeArgs),
+    Forward(ForwardArgs),
     Tunnel(TunnelArgs),
     List(ListArgs),
     #[command(alias = "show")]
@@ -41,6 +42,61 @@ pub struct ConnectArgs {
 
     #[arg(long, default_value_t = 22, help = "SSH server port")]
     pub port: u16,
+
+    #[arg(long, help = "SSH password authentication")]
+    pub password: Option<String>,
+
+    #[arg(long = "key", value_name = "PATH", help = "SSH private key path")]
+    pub key: Option<PathBuf>,
+
+    #[arg(long, help = "Run in background")]
+    pub daemon: bool,
+
+    #[arg(long, value_name = "PATH", help = "Log file path for daemon mode")]
+    pub log_file: Option<PathBuf>,
+
+    #[arg(long, help = "Accept remote host key without verification")]
+    pub insecure_accept_host_key: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ForwardArgs {
+    #[arg(
+        long = "local",
+        short = 'L',
+        value_name = "SPEC",
+        required = true,
+        help = "Local mapping, format: LOCAL_PORT:TARGET_HOST:TARGET_PORT"
+    )]
+    pub local: Vec<String>,
+
+    #[arg(
+        long = "remote",
+        short = 'r',
+        value_name = "SERVER",
+        help = "SSH server, format: [USER@]SERVER[:PORT]"
+    )]
+    pub remote: String,
+
+    #[arg(
+        long,
+        help = "SSH username (overrides USER@ in --remote when matching)"
+    )]
+    pub user: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "ADDR",
+        help = "Local bind address (defaults to 127.0.0.1)"
+    )]
+    pub bind: Option<String>,
+
+    #[arg(
+        long,
+        help = "Bind local listeners on 0.0.0.0",
+        conflicts_with = "bind"
+    )]
+    pub gateway: bool,
 
     #[arg(long, help = "SSH password authentication")]
     pub password: Option<String>,
